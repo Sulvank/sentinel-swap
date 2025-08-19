@@ -62,24 +62,16 @@ contract SentinelSwap is Ownable {
         uint256 amountBMin_,
         uint256 deadline_
     ) external returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
-        // 1) basic checks
         _requireAllowed(tokenA_);
         _requireAllowed(tokenB_);
         if (block.timestamp > deadline_) revert DeadlineExpired(block.timestamp, deadline_);
 
-        // 2) pull tokens from user into the manager (fee-on-transfer friendly)
-        uint256 balABefore = IERC20(tokenA_).balanceOf(address(this));
-        uint256 balBBefore = IERC20(tokenB_).balanceOf(address(this));
-        IERC20(tokenA_).safeTransferFrom(msg.sender, address(this), amountADesired_);
-        IERC20(tokenB_).safeTransferFrom(msg.sender, address(this), amountBDesired_);
-        uint256 receivedA = IERC20(tokenA_).balanceOf(address(this)) - balABefore;
-        uint256 receivedB = IERC20(tokenB_).balanceOf(address(this)) - balBBefore;
+        uint256 receivedA = _pullReceived(tokenA_, amountADesired_);
+        uint256 receivedB = _pullReceived(tokenB_, amountBDesired_);
 
-        // 3) approve router (use received amounts to handle fee-on-transfer tokens)
-        IERC20(tokenA_).forceApprove(router, receivedA);
-        IERC20(tokenB_).forceApprove(router, receivedB);
+        _approveRouter(tokenA_, receivedA);
+        _approveRouter(tokenB_, receivedB);
 
-        // 4) call router; mint LP directly to the user
         (amountA, amountB, liquidity) = IV2Router02(router).addLiquidity(
             tokenA_,
             tokenB_,
@@ -91,12 +83,28 @@ contract SentinelSwap is Ownable {
             deadline_
         );
 
-        // 5) refund leftovers to the user (any dust remaining on the manager)
-        uint256 leftoverA = IERC20(tokenA_).balanceOf(address(this));
-        uint256 leftoverB = IERC20(tokenB_).balanceOf(address(this));
-        if (leftoverA > 0) IERC20(tokenA_).safeTransfer(msg.sender, leftoverA);
-        if (leftoverB > 0) IERC20(tokenB_).safeTransfer(msg.sender, leftoverB);
+        // refund leftovers in two tiny scopes (helps IR-less compilers too)
+        {
+            uint256 leftoverA = IERC20(tokenA_).balanceOf(address(this));
+            if (leftoverA > 0) IERC20(tokenA_).safeTransfer(msg.sender, leftoverA);
+        }
+        {
+            uint256 leftoverB = IERC20(tokenB_).balanceOf(address(this));
+            if (leftoverB > 0) IERC20(tokenB_).safeTransfer(msg.sender, leftoverB);
+        }
 
         emit LiquidityAdded(msg.sender, tokenA_, tokenB_, amountA, amountB, liquidity);
     }
+
+
+    function _pullReceived(address token_, uint256 amount_) internal returns (uint256 received_) {
+        uint256 before_ = IERC20(token_).balanceOf(address(this));
+        IERC20(token_).safeTransferFrom(msg.sender, address(this), amount_);
+        received_ = IERC20(token_).balanceOf(address(this)) - before_;
+    }
+
+    function _approveRouter(address token_, uint256 amount_) internal {
+        IERC20(token_).forceApprove(router, amount_);
+    }
+
 }
