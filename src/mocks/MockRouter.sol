@@ -44,4 +44,22 @@ contract MockRouter {
         liquidity = amountA + amountB;
         IMockLP(lpToken).mint(to, liquidity);
     }
+
+    function removeLiquidity(
+        address tokenA_,
+        address tokenB_,
+        uint256 liquidity_,
+        uint256, // amountAMin (ignored)
+        uint256, // amountBMin (ignored)
+        address to_,
+        uint256 // deadline (ignored)
+    ) external returns (uint256 amountA, uint256 amountB) {
+        // Simula que devuelve los tokens al usuario
+        amountA = liquidity_ / 2;
+        amountB = liquidity_ / 2;
+
+        IERC20(tokenA_).transfer(to_, amountA);
+        IERC20(tokenB_).transfer(to_, amountB);
+    }
+
 }

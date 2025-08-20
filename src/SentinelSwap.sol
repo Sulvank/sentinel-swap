@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 contract SentinelSwap is Ownable {
     using SafeERC20 for IERC20;
 
-    // DEX router and factory addresses
+    uint256 public rewardRate = 1e16; // 0.01 tokens per second per LP token
     uint256 public liquidityTimelock = 1 days;
     address public router;
     address public factory;
@@ -19,15 +19,18 @@ contract SentinelSwap is Ownable {
     // Allowed token whitelist (security)
     mapping(address => bool) public allowedTokens;
     mapping(address => uint256) public lastLiquidityAdd;
+    mapping(address => uint256) public rewards;
+    mapping(address => uint256) public userLiquidity;
+    mapping(address => uint256) public lastUpdate;
 
-    // Custom errors (cheaper than require strings)
+    // Custom errors
     error ZeroAddress();
     error TokenNotAllowed(address token);
     error DeadlineExpired(uint256 nowTs, uint256 deadline);
 
-    // Event to track whitelist changes
+    // Events
     event TokenAllowed(address indexed token, bool allowed);
-        event LiquidityAdded(
+    event LiquidityAdded(
         address indexed provider,
         address indexed tokenA,
         address indexed tokenB,
@@ -35,26 +38,23 @@ contract SentinelSwap is Ownable {
         uint256 amountB,
         uint256 liquidity
     );
+    event RewardClaimed(address indexed user, uint256 amount);
 
-    /// Explicit owner (OZ v5 requires initial owner)
     constructor(address router_, address factory_, address initialOwner_) Ownable(initialOwner_) {
         if (router_ == address(0) || factory_ == address(0)) revert ZeroAddress();
         router = router_;
         factory = factory_;
     }
 
-    /// Toggle token allow-list (owner only)
     function setAllowedToken(address token_, bool allowed_) external onlyOwner {
         if (token_ == address(0)) revert ZeroAddress();
         allowedTokens[token_] = allowed_;
         emit TokenAllowed(token_, allowed_);
     }
 
-    /// Internal helper reused in add/remove/swap
     function _requireAllowed(address token_) internal view {
         if (!allowedTokens[token_]) revert TokenNotAllowed(token_);
     }
-
 
     function addLiquidity(
         address tokenA_,
@@ -86,7 +86,6 @@ contract SentinelSwap is Ownable {
             deadline_
         );
 
-        // refund leftovers in two tiny scopes (helps IR-less compilers too)
         {
             uint256 leftoverA = IERC20(tokenA_).balanceOf(address(this));
             if (leftoverA > 0) IERC20(tokenA_).safeTransfer(msg.sender, leftoverA);
@@ -95,6 +94,10 @@ contract SentinelSwap is Ownable {
             uint256 leftoverB = IERC20(tokenB_).balanceOf(address(this));
             if (leftoverB > 0) IERC20(tokenB_).safeTransfer(msg.sender, leftoverB);
         }
+
+        _updateRewards(msg.sender);
+        userLiquidity[msg.sender] += liquidity;
+        lastLiquidityAdd[msg.sender] = block.timestamp;
 
         emit LiquidityAdded(msg.sender, tokenA_, tokenB_, amountA, amountB, liquidity);
     }
@@ -111,25 +114,20 @@ contract SentinelSwap is Ownable {
         _requireAllowed(tokenB_);
         if (block.timestamp > deadline_) revert DeadlineExpired(block.timestamp, deadline_);
 
-        // ⏳ Enforce timelock
         require(
             block.timestamp >= lastLiquidityAdd[msg.sender] + liquidityTimelock,
             "Liquidity is still locked"
         );
 
-        // Get the pair address
         address pair = IV2Factory(factory).getPair(tokenA_, tokenB_);
         if (pair == address(0)) revert("Pair does not exist");
 
-        // Pull LP tokens from user
         uint256 before = IERC20(pair).balanceOf(address(this));
         IERC20(pair).safeTransferFrom(msg.sender, address(this), liquidity_);
         uint256 received = IERC20(pair).balanceOf(address(this)) - before;
 
-        // Approve router to spend LP tokens
         _approveRouter(pair, received);
 
-        // Remove liquidity via router
         (amountA, amountB) = IV2Router02(router).removeLiquidity(
             tokenA_,
             tokenB_,
@@ -139,9 +137,31 @@ contract SentinelSwap is Ownable {
             msg.sender,
             deadline_
         );
+
+        _updateRewards(msg.sender);
+        userLiquidity[msg.sender] -= liquidity_;
     }
 
+    function claimRewards() external {
+        _updateRewards(msg.sender);
 
+        uint256 reward = rewards[msg.sender];
+        require(reward > 0, "No rewards to claim");
+
+        rewards[msg.sender] = 0;
+
+        // Future: Transfer or mint real tokens here
+        emit RewardClaimed(msg.sender, reward);
+    }
+
+    function _updateRewards(address user_) internal {
+        uint256 liquidity = userLiquidity[user_];
+        if (liquidity > 0) {
+            uint256 duration = block.timestamp - lastUpdate[user_];
+            rewards[user_] += duration * liquidity * rewardRate / 1e18;
+        }
+        lastUpdate[user_] = block.timestamp;
+    }
 
     function _pullReceived(address token_, uint256 amount_) internal returns (uint256 received_) {
         uint256 before_ = IERC20(token_).balanceOf(address(this));
@@ -152,5 +172,4 @@ contract SentinelSwap is Ownable {
     function _approveRouter(address token_, uint256 amount_) internal {
         IERC20(token_).forceApprove(router, amount_);
     }
-
 }

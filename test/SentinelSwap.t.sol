@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "../src/SentinelSwap.sol";
 import "../src/mocks/MockLP.sol";
 import "../src/mocks/MockRouter.sol";
+import "../src/mocks/MockFactory.sol";
 import "../src/mocks/TestToken.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -18,6 +19,12 @@ contract SentinelSwapTest is Test {
     TestToken private tokenB;
 
     address private user;
+
+    error DeadlineExpired(uint256 nowTs, uint256 deadline);
+    error TokenNotAllowed(address token);
+
+    event RewardClaimed(address indexed user, uint256 amount);
+
 
     function setUp() public {
         user = address(0xBEEF);
@@ -33,8 +40,12 @@ contract SentinelSwapTest is Test {
         lp = new MockLP(address(router));
         router.setLpToken(address(lp));
 
-        // Deploy manager (factory can be a dummy for unit tests)
-        sentinelSwap = new SentinelSwap(address(router), address(1), address(this));
+        // Deploy mock factory and set LP pair
+        MockFactory factory = new MockFactory();
+        factory.setPair(address(lp));
+
+        // Deploy SentinelSwap with router and factory
+        sentinelSwap = new SentinelSwap(address(router), address(factory), address(this));
 
         // Whitelist tokens
         sentinelSwap.setAllowedToken(address(tokenA), true);
@@ -49,6 +60,7 @@ contract SentinelSwapTest is Test {
         IERC20(address(tokenB)).approve(address(sentinelSwap), type(uint256).max);
         vm.stopPrank();
     }
+
 
     function testAddLiquidityRefundsLeftoversAndMintsLP() public {
         uint256 desiredA_ = 500e18;
@@ -93,7 +105,7 @@ contract SentinelSwapTest is Test {
         vm.prank(user);
         vm.expectRevert(
             abi.encodeWithSelector(
-                SentinelSwap.DeadlineExpired.selector,
+                DeadlineExpired.selector,
                 nowTs,            // nowTs inside the function
                 nowTs - 1         // the expired deadline you pass
             )
@@ -110,13 +122,14 @@ contract SentinelSwapTest is Test {
     }
 
 
+
     function testAddLiquidityRevertsOnNotAllowedToken() public {
         sentinelSwap.setAllowedToken(address(tokenB), false);
 
         vm.prank(user);
         vm.expectRevert(
             abi.encodeWithSelector(
-                SentinelSwap.TokenNotAllowed.selector,
+                TokenNotAllowed.selector,
                 address(tokenB) // the address the revert encodes
             )
         );
@@ -159,5 +172,154 @@ contract SentinelSwapTest is Test {
         );
     }
 
+    function testRemoveLiquidityRevertsBeforeTimelock() public {
+        vm.startPrank(user);
+
+        tokenA.approve(address(sentinelSwap), 1000e18);
+        tokenB.approve(address(sentinelSwap), 1000e18);
+
+        sentinelSwap.addLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1000e18,
+            1000e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        vm.expectRevert("Liquidity is still locked");
+        sentinelSwap.removeLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1000e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+    }
+
+    function testClaimRewardsAccumulatesOverTime() public {
+        vm.startPrank(user);
+
+        tokenA.approve(address(sentinelSwap), 1000e18);
+        tokenB.approve(address(sentinelSwap), 1000e18);
+
+        (,, uint256 liquidity) = sentinelSwap.addLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1000e18,
+            1000e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        // Avanza el tiempo para cumplir timelock y ganar recompensas
+        vm.warp(block.timestamp + 6 days);
+
+        // 👇 ESTA LÍNEA es la solución al error actual
+        ERC20(address(lp)).approve(address(sentinelSwap), type(uint256).max);
+
+        // Ahora ya puedes retirar liquidez sin revert
+        sentinelSwap.removeLiquidity(
+            address(tokenA),
+            address(tokenB),
+            liquidity,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        // Verifica y reclama las recompensas
+        uint256 rewardsBefore = sentinelSwap.rewards(user);
+        assertGt(rewardsBefore, 0);
+
+        sentinelSwap.claimRewards();
+        uint256 rewardsAfter = sentinelSwap.rewards(user);
+        assertEq(rewardsAfter, 0);
+
+    }
+
+    function testClaimRewardsRevertsIfZero() public {
+        vm.startPrank(user);
+        vm.expectRevert("No rewards to claim");
+        sentinelSwap.claimRewards();
+    }
+
+    function testClaimRewardsEmitsEvent() public {
+        vm.startPrank(user);
+
+        tokenA.approve(address(sentinelSwap), 1000e18);
+        tokenB.approve(address(sentinelSwap), 1000e18);
+
+        (, , uint256 liquidity) = sentinelSwap.addLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1000e18,
+            1000e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        vm.warp(block.timestamp + 6 days);
+
+        // ✅ Aprobación del LP token (soluciona el revert)
+        ERC20(address(lp)).approve(address(sentinelSwap), type(uint256).max);
+
+        sentinelSwap.removeLiquidity(
+            address(tokenA),
+            address(tokenB),
+            liquidity,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        uint256 expectedReward = sentinelSwap.rewards(user);
+
+        vm.expectEmit(true, false, false, true);
+        emit RewardClaimed(user, expectedReward);
+
+        sentinelSwap.claimRewards();
+    }
+
+    function testRemoveLiquidityRefundsTokens() public {
+        vm.startPrank(user);
+
+        tokenA.approve(address(sentinelSwap), 1000e18);
+        tokenB.approve(address(sentinelSwap), 1000e18);
+
+        (,, uint256 liquidity) = sentinelSwap.addLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1000e18,
+            1000e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        // Avanza el tiempo para cumplir timelock
+        vm.warp(block.timestamp + 7 days);
+
+        // ✅ Aprueba el LP token antes de retirar
+        ERC20(address(lp)).approve(address(sentinelSwap), type(uint256).max);
+
+        // Retira liquidez
+        sentinelSwap.removeLiquidity(
+            address(tokenA),
+            address(tokenB),
+            liquidity,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        // Verifica que los tokens fueron devueltos al usuario
+        assertGt(tokenA.balanceOf(user), 0);
+        assertGt(tokenB.balanceOf(user), 0);
+    }
 
 }
