@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "./interfaces/IV2Router02.sol";
+import "./interfaces/IV2Factory.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -11,11 +12,13 @@ contract SentinelSwap is Ownable {
     using SafeERC20 for IERC20;
 
     // DEX router and factory addresses
+    uint256 public liquidityTimelock = 1 days;
     address public router;
     address public factory;
 
     // Allowed token whitelist (security)
     mapping(address => bool) public allowedTokens;
+    mapping(address => uint256) public lastLiquidityAdd;
 
     // Custom errors (cheaper than require strings)
     error ZeroAddress();
@@ -95,6 +98,49 @@ contract SentinelSwap is Ownable {
 
         emit LiquidityAdded(msg.sender, tokenA_, tokenB_, amountA, amountB, liquidity);
     }
+
+    function removeLiquidity(
+        address tokenA_,
+        address tokenB_,
+        uint256 liquidity_,
+        uint256 amountAMin_,
+        uint256 amountBMin_,
+        uint256 deadline_
+    ) external returns (uint256 amountA, uint256 amountB) {
+        _requireAllowed(tokenA_);
+        _requireAllowed(tokenB_);
+        if (block.timestamp > deadline_) revert DeadlineExpired(block.timestamp, deadline_);
+
+        // ⏳ Enforce timelock
+        require(
+            block.timestamp >= lastLiquidityAdd[msg.sender] + liquidityTimelock,
+            "Liquidity is still locked"
+        );
+
+        // Get the pair address
+        address pair = IV2Factory(factory).getPair(tokenA_, tokenB_);
+        if (pair == address(0)) revert("Pair does not exist");
+
+        // Pull LP tokens from user
+        uint256 before = IERC20(pair).balanceOf(address(this));
+        IERC20(pair).safeTransferFrom(msg.sender, address(this), liquidity_);
+        uint256 received = IERC20(pair).balanceOf(address(this)) - before;
+
+        // Approve router to spend LP tokens
+        _approveRouter(pair, received);
+
+        // Remove liquidity via router
+        (amountA, amountB) = IV2Router02(router).removeLiquidity(
+            tokenA_,
+            tokenB_,
+            received,
+            amountAMin_,
+            amountBMin_,
+            msg.sender,
+            deadline_
+        );
+    }
+
 
 
     function _pullReceived(address token_, uint256 amount_) internal returns (uint256 received_) {

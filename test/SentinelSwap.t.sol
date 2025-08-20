@@ -50,7 +50,7 @@ contract SentinelSwapTest is Test {
         vm.stopPrank();
     }
 
-    function testAddLiquidity_RefundsLeftoversAndMintsLP() public {
+    function testAddLiquidityRefundsLeftoversAndMintsLP() public {
         uint256 desiredA_ = 500e18;
         uint256 desiredB_ = 400e18;
         uint256 deadline_ = block.timestamp + 1 hours;
@@ -87,7 +87,7 @@ contract SentinelSwapTest is Test {
         assertEq(tokenB.balanceOf(address(sentinelSwap)), 0);
     }
 
-    function testAddLiquidity_RevertsOnDeadline() public {
+    function testAddLiquidityRevertsOnDeadline() public {
         uint256 nowTs = block.timestamp; // capture current block timestamp
 
         vm.prank(user);
@@ -110,7 +110,7 @@ contract SentinelSwapTest is Test {
     }
 
 
-    function testAddLiquidity_RevertsOnNotAllowedToken() public {
+    function testAddLiquidityRevertsOnNotAllowedToken() public {
         sentinelSwap.setAllowedToken(address(tokenB), false);
 
         vm.prank(user);
@@ -130,5 +130,34 @@ contract SentinelSwapTest is Test {
             block.timestamp + 1 hours
         );
     }
+
+    function testRemoveLiquidityRevertsIfLocked() public {
+        vm.startPrank(user);
+
+        tokenA.approve(address(sentinelSwap), 1000e18);
+        tokenB.approve(address(sentinelSwap), 1000e18);
+
+        sentinelSwap.addLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1000e18,
+            1000e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+
+        // No ha pasado el timelock
+        vm.expectRevert("Liquidity is still locked");
+        sentinelSwap.removeLiquidity(
+            address(tokenA),
+            address(tokenB),
+            1e18, // LP tokens (ajustar)
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+    }
+
 
 }
