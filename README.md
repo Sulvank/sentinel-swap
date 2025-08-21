@@ -1,132 +1,124 @@
-# 🔄 Sentinel Swap
+# 🛡 SentinelSwap
 
-**Sentinel Swap** is a simplified Uniswap V2-style orchestrator contract built with Solidity and Foundry. It enables token swaps and liquidity operations using an external router (e.g. Uniswap V2-compatible), and introduces basic liquidity mining and timelock features to enhance safety and incentivization.
-
-> **Note**
-> This contract integrates liquidity rewards and enforces withdrawal restrictions to improve protocol robustness.
+**SentinelSwap** is a Solidity smart contract that acts as a secure wrapper around a Uniswap V2-like Router. It introduces token whitelisting, timelocked liquidity, and reward accrual for liquidity providers, without needing to create custom liquidity pools.
 
 ---
 
-## 🔹 Key Features
+## 📚 Overview
 
-* ✅ Add/remove liquidity using Uniswap V2 router.
-* ✅ Enforce 1-day **liquidity timelock** before withdrawal.
-* ✅ Track **liquidity mining rewards** per user.
-* ✅ Function to **claim accumulated rewards** (`claimRewards`).
-* ✅ Secure token whitelist with custom errors.
-* ✅ Deployment and testing via Foundry.
+This contract:
 
----
-
-## 📄 Contract Overview
-
-| 🔧 Item                  | 📋 Description                                           |
-| ------------------------ | -------------------------------------------------------- |
-| **Contract Name**        | `SentinelSwap`                                           |
-| **Liquidity Timelock**   | `1 days` (configurable)                                  |
-| **Reward Rate**          | `1e16` per second per LP token (can be updated manually) |
-| **Tokens Tracked**       | Liquidity Providers and rewards per user                 |
-| **Router Compatibility** | Uniswap V2-style router and LP contracts                 |
+* Wraps `addLiquidity` and `removeLiquidity` of Uniswap V2 Routers
+* Tracks liquidity added per user
+* Locks liquidity for a minimum period
+* Accrues rewards over time based on the user's liquidity
+* Supports only whitelisted tokens for enhanced security
 
 ---
 
-## 🚀 How to Use Locally
+## ✨ Features
 
-### 1️⃣ Clone and Set Up
+### ✅ Token Whitelisting
+
+Only explicitly allowed tokens can be used for liquidity operations.
+
+### 💧 Add Liquidity
+
+* Transfers desired amounts from user
+* Approves router
+* Calls `addLiquidity`
+* Refunds leftovers to user
+* Updates user's liquidity and reward state
+
+### 🔓 Remove Liquidity
+
+* Validates timelock has passed
+* Checks that the pair exists via the Factory
+* Transfers LP tokens from user and approves router
+* Calls `removeLiquidity`
+* Updates liquidity and rewards
+
+### 🪙 Reward Accrual
+
+* Reward rate: `0.01` tokens per second per LP token (`1e16 wei`)
+* Rewards accumulate over time and can be claimed
+* Reward emission is tracked and emitted as an event (`RewardClaimed`)
+
+### ⏳ Timelock Mechanism
+
+* Liquidity cannot be withdrawn before 1 day has passed since adding it
+
+---
+
+## 🧪 Test Coverage
+
+Test suite: `SentinelSwapTest.t.sol`
+
+### ✅ Passed Tests (11/11)
+
+* `testAddLiquidityRefundsLeftoversAndMintsLP`
+* `testAddLiquidityRevertsOnDeadline`
+* `testAddLiquidityRevertsOnNotAllowedToken`
+* `testRemoveLiquidityRevertsBeforeTimelock`
+* `testRemoveLiquidityRevertsIfLocked`
+* `testRemoveLiquidityRevertsIfPairDoesNotExist`
+* `testRemoveLiquidityRefundsTokens`
+* `testClaimRewardsAccumulatesOverTime`
+* `testClaimRewardsEmitsEvent`
+* `testClaimRewardsRevertsIfZero`
+* `testUpdateRewardsNoLiquidityDoesNotRevert`
+
+### 🔍 Forge Coverage
+
+```
+src/SentinelSwap.sol      | 100.00% lines | 95.71% statements | 76.92% branches | 100.00% funcs
+src/mocks/MockFactory.sol | 100.00% lines | 100.00% statements | 100.00% branches | 100.00% funcs
+src/mocks/MockLP.sol      | 100.00% lines | 100.00% statements | 50.00% branches | 100.00% funcs
+src/mocks/MockRouter.sol  | 100.00% lines | 100.00% statements | 50.00% branches | 100.00% funcs
+src/mocks/TestToken.sol   | 100.00% lines | 100.00% statements | n/a             | 100.00% funcs
+```
+
+### ✅ Total:
+
+* **Lines**: 100.00% (`90/90`)
+* **Statements**: 96.77% (`90/93`)
+* **Branches**: 72.22% (`13/18`)
+* **Functions**: 100.00% (`18/18`)
+
+---
+
+## 🔐 Security Considerations
+
+* Enforced whitelisting prevents malicious token usage
+* Timelocks prevent flash liquidity exploits
+* Reward emission logic uses state tracking to avoid manipulation
+
+---
+
+## 🧰 Tech Stack
+
+* **Solidity 0.8.28**
+* **Forge (Foundry)** for testing & coverage
+* **OpenZeppelin**: Ownable, SafeERC20
+
+---
+
+## 👨‍🔬 Developer Notes
+
+* Reward logic is extensible to include real token payouts in future
+* Custom errors used for optimized gas and clarity
+* Designed for compatibility with Uniswap V2-style DEXs
+
+---
+
+## 🧪 Run Tests
 
 ```bash
-git clone https://github.com/Sulvank/sentinel-swap.git
-cd sentinel-swap
+forge test -vv
 ```
 
-### 2️⃣ Install Foundry
+## 📊 Run Coverage
 
 ```bash
-curl -L https://foundry.paradigm.xyz | bash
-foundryup
+forge coverage
 ```
-
-### 3️⃣ Run Tests
-
-```bash
-forge test -vvv
-```
-
-> You can use `forge coverage` to generate a full test coverage report.
-
----
-
-## 🧠 Project Structure
-
-```
-sentinel-swap/
-├── lib/                        # OpenZeppelin + other libraries
-├── script/                    # (Optional) Deployment scripts
-├── src/                       # Main smart contracts
-│   ├── SentinelSwap.sol       # Core contract
-│   ├── mocks/                 # Mocks for testing (router, factory, LP)
-├── test/                      # Foundry tests
-│   └── SentinelSwap.t.sol     # Complete test suite
-├── foundry.toml               # Foundry configuration
-└── README.md                  # Project documentation
-```
-
----
-
-## 🔍 Contract Summary
-
-### Functions
-
-| Function                          | Description                                           |
-| --------------------------------- | ----------------------------------------------------- |
-| `addLiquidity(...)`               | Provides liquidity via external router                |
-| `removeLiquidity(...)`            | Withdraws liquidity with timelock enforcement         |
-| `claimRewards()`                  | Allows users to claim their accrued liquidity rewards |
-| `setAllowedToken(token, allowed)` | Owner function to whitelist or block a token          |
-
-### Events
-
-| Event                 | Description                                   |
-| --------------------- | --------------------------------------------- |
-| `LiquidityAdded(...)` | Emitted on each successful liquidity addition |
-| `RewardClaimed(...)`  | Emitted when user claims reward tokens        |
-
-### Custom Errors
-
-| Error                  | When it triggers             |
-| ---------------------- | ---------------------------- |
-| `DeadlineExpired(...)` | Provided deadline has passed |
-| `TokenNotAllowed(...)` | Token is not whitelisted     |
-| `ZeroAddress()`        | Passed address is invalid    |
-
----
-
-## 🧪 Tests
-
-Includes comprehensive test coverage for:
-
-* ✅ Liquidity addition and leftovers refund
-* ✅ Liquidity withdrawal with timelock enforcement
-* ✅ Reward accumulation and claiming
-* ✅ Reverts on deadline and unapproved tokens
-* ✅ Event emission (`LiquidityAdded`, `RewardClaimed`)
-
-### 📊 Test Coverage
-
-| File                      | % Lines  | % Statements | % Branches | % Functions |
-| ------------------------- | -------- | ------------ | ---------- | ----------- |
-| `src/SentinelSwap.sol`    | 100%     | 100%         | 100%       | 100%        |
-| `test/SentinelSwap.t.sol` | 100%     | 100%         | 100%       | 100%        |
-| **Total**                 | **100%** | **100%**     | **100%**   | **100%**    |
-
-> Generated using `forge coverage` with Solidity 0.8.28
-
----
-
-## 📜 License
-
-This project is licensed under the MIT License. See the `LICENSE` file for details.
-
----
-
-### 🛡️ Sentinel Swap: Extendable, Secure, Reward-Based Liquidity Layer
