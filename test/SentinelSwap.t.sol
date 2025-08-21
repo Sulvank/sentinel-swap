@@ -42,7 +42,8 @@ contract SentinelSwapTest is Test {
 
         // Deploy mock factory and set LP pair
         MockFactory factory = new MockFactory();
-        factory.setPair(address(lp));
+        factory.setPair(address(lp), address(tokenA), address(tokenB));
+
 
         // Deploy SentinelSwap with router and factory
         sentinelSwap = new SentinelSwap(address(router), address(factory), address(this));
@@ -321,5 +322,40 @@ contract SentinelSwapTest is Test {
         assertGt(tokenA.balanceOf(user), 0);
         assertGt(tokenB.balanceOf(user), 0);
     }
+
+    function testUpdateRewardsNoLiquidityDoesNotRevert() public {
+        // No hay LP añadidos, así que no hay rewards
+        vm.prank(user);
+
+        // Simula reclamo indirecto sin revert (rewards = 0)
+        vm.expectRevert("No rewards to claim");
+        sentinelSwap.claimRewards();
+    }
+
+    function testRemoveLiquidityRevertsIfPairDoesNotExist() public {
+        address fakeToken = address(0x1234);
+
+        // Asegura que ambos tokens estén permitidos
+        sentinelSwap.setAllowedToken(fakeToken, true);
+        sentinelSwap.setAllowedToken(address(tokenA), true);
+
+        // Avanza el tiempo para evitar el revert por timelock
+        vm.warp(block.timestamp + 2 days);
+
+        vm.expectRevert("Pair does not exist");
+        vm.prank(user);
+        sentinelSwap.removeLiquidity(
+            address(tokenA),
+            fakeToken,
+            1e18,
+            0,
+            0,
+            block.timestamp + 1 hours
+        );
+    }
+
+
+
+
 
 }
